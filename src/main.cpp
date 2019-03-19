@@ -14,6 +14,7 @@
 using nlohmann::json;
 using std::string;
 using std::vector;
+using namespace std;
 
 int main() {
   uWS::Hub h;
@@ -52,14 +53,12 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
   /* Set lane and velocity information*/
-  int lane =  1;
+  int     lane =  1;
   double  ref_vel = 0;
-  double max_velocity = 49.5;
-  bool lane_change_started = false;
-  bool lane_change_completed = true;
-  bool prev_lane = 1;
+  double  max_velocity = 49.5;
+  bool    lane_change_state = STATE_FINISH;
   
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
+  h.onMessage([&ref_vel,&max_velocity,&lane_change_state,&lane,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
                &map_waypoints_dx,&map_waypoints_dy]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
@@ -112,67 +111,47 @@ int main() {
           {
              car_s = end_path_s;
           }
-          bool too_close = false;
-          bool lane_change_needed = false;
 
-          double check_speed_front = 0.0;
           int curr_lane = checklane(car_d);
-          auto front_car = egoTooCloseFront(sensor_fusion,curr_lane,car_s,prev_size);
-          front_car = false;
-          if(front_car) 
-          {
-              if( ref_vel < max_velocity) 
-              {
-                  lane_change_needed = true;
-              }
-              too_close = true;
-          }
 
-          if(lane_change_started )
-          {
-              if(curr_lane == lane)
-              {
-                  lane_change_started = false;
-                  lane_change_completed = true;
-              }
-          }
+          /*check if ego is possible to kick front car*/
+          bool front_collision = egokicksFront(sensor_fusion,curr_lane,car_s,prev_size,car_speed);
 
+          /*set correct state*/
+          lane_change_state = (curr_lane == lane)? STATE_FINISH:STATE_START;
 
-          if(too_close == true)
+          /*plan following behavior*/
+          if(front_collision)
           {
-            ref_vel -= .324;
-              
-            if(lane_change_needed && !lane_change_started)
+            
+            if(lane_change_state != STATE_START)
             {
-                bool bchange_left = SideChangePossible(sensor_fusion,curr_lane,car_s,prev_size, TARGET_LEFT);
+                bool bchange_left = SideChangePossible(sensor_fusion,curr_lane,car_s,prev_size, TARGET_LEFT, car_speed);
            
-                if(    lane_change_needed 
-                    && bchange_left       )
+                if(bchange_left)
                 {
-                    prev_lane = lane;
-                    lane = lane+1;
-                    lane_change_started = true;
-                    lane_change_completed = false;
-                    lane_change_needed = false;
+                    lane = lane + TARGET_LEFT;
+                    lane_change_state = STATE_START;
                 }
                 else
                 {
-                    bool bchange_right = SideChangePossible(sensor_fusion,curr_lane,car_s,prev_size, TARGET_LEFT);
-                    if(    lane_change_needed 
-                       &&  bchange_left       )
+                    bool bchange_right = SideChangePossible(sensor_fusion,curr_lane,car_s,prev_size, TARGET_RIGHT, car_speed);
+                    
+                    if(bchange_right)
                     {
-                      prev_lane = lane;
-                      lane = lane+1;
-                      lane_change_started = true;
-                      lane_change_completed = false;
-                      lane_change_needed = false;
+                      lane = lane + TARGET_RIGHT;
+                      lane_change_state = STATE_START;
+                    }
+                    else
+                    {
+                        ref_vel -= .224;
                     }
                 }
             }
           }
           else if(ref_vel < max_velocity)
           {
-              ref_vel+=.224;
+              ref_vel += .224;
           }
           
           vector<double> ptsx;
@@ -248,15 +227,9 @@ int main() {
           double target_dist = sqrt((target_x)*(target_x)+(target_y)*(target_y));
           
           double  x_add_on = 0;
-          double cur_velocity;
 
           for(int i = 1; i <= 50-previous_path_x.size(); i++)
           {
-              if(cur_velocity > ref_vel)
-              {
-                  cur_velocity+=0.224;
-              }
-              
               double N = (target_dist/(.02*ref_vel/2.24));
               double x_point = x_add_on+(target_x)/N;
               double y_point = s(x_point);
